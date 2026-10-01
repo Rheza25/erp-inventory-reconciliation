@@ -1,0 +1,96 @@
+import csv
+import random
+from datetime import datetime, timedelta
+
+# Define basic parameters
+items = [f"ITEM-{100+i}" for i in range(1, 6)] # 5 distinct items
+warehouses = [f"WH-{str(i).zfill(2)}" for i in range(1, 11)] # 10 warehouses
+
+# Dictionaries to track our data
+starting_inventory = []
+transactions = []
+physical_counts = []
+true_physical_balance = {} # This tracks what the stock *actually* is
+
+# 1. Generate Starting Inventory
+for item in items:
+    for wh in warehouses:
+        qty = random.randint(50, 150)
+        starting_inventory.append([item, wh, qty])
+        true_physical_balance[(item, wh)] = qty
+
+current_time = datetime(2026, 10, 1, 8, 0)
+txn_id = 1000
+
+# 2. Generate Normal Transactions (Receipts & Withdrawals)
+for _ in range(50):
+    item = random.choice(items)
+    wh = random.choice(warehouses)
+    txn_type = random.choice(["Receipt", "Withdrawal"])
+    qty = random.randint(5, 20)
+    
+    if txn_type == "Withdrawal":
+        qty = -qty # Withdrawals reduce inventory
+        
+    transactions.append([f"TXN-{txn_id}", current_time.strftime("%Y-%m-%d %H:%M"), item, wh, txn_type, qty, f"user_{random.randint(10,99)}"])
+    true_physical_balance[(item, wh)] += qty
+    txn_id += 1
+    current_time += timedelta(minutes=random.randint(15, 120))
+
+# 3. Generate Warehouse Transfers
+for _ in range(15):
+    item = random.choice(items)
+    wh_from, wh_to = random.sample(warehouses, 2)
+    qty = random.randint(5, 15)
+    
+    # Deduct from source warehouse
+    transactions.append([f"TXN-{txn_id}", current_time.strftime("%Y-%m-%d %H:%M"), item, wh_from, "Transfer_Out", -qty, "user_12"])
+    true_physical_balance[(item, wh_from)] -= qty
+    txn_id += 1
+    
+    # Add to destination warehouse
+    transactions.append([f"TXN-{txn_id}", current_time.strftime("%Y-%m-%d %H:%M"), item, wh_to, "Transfer_In", qty, "system"])
+    true_physical_balance[(item, wh_to)] += qty
+    txn_id += 1
+    current_time += timedelta(minutes=random.randint(15, 120))
+
+# 4. Inject the Target Anomalies (The Phantom Increases)
+# We withdraw an item physically, but the system magically adds it back later.
+for _ in range(4):
+    item = random.choice(items)
+    wh = random.choice(warehouses)
+    
+    # Legitimate physical withdrawal
+    qty = random.randint(10, 20)
+    transactions.append([f"TXN-{txn_id}", current_time.strftime("%Y-%m-%d %H:%M"), item, wh, "Withdrawal", -qty, "user_42"])
+    true_physical_balance[(item, wh)] -= qty # Physical stock leaves the building
+    txn_id += 1
+    current_time += timedelta(minutes=5)
+    
+    # The anomaly: System automatically adjusts it back up, causing the ERP to be higher than physical stock
+    transactions.append([f"TXN-{txn_id}", current_time.strftime("%Y-%m-%d %H:%M"), item, wh, "System_Adjustment", qty, "system_auto"])
+    # Notice we DO NOT add this to 'true_physical_balance' because the physical item didn't actually come back!
+    txn_id += 1
+    current_time += timedelta(minutes=random.randint(15, 120))
+
+# 5. Generate Physical Counts
+# The auditors count the true physical stock (with a small chance of a normal human counting error)
+for (item, wh), balance in true_physical_balance.items():
+    counted_qty = balance
+    if random.random() < 0.05: # 5% chance of a minor manual counting error
+        counted_qty += random.choice([-1, 1])
+    physical_counts.append([item, wh, counted_qty])
+
+# --- Write Data to CSV Files ---
+def write_csv(filename, headers, data):
+    with open(filename, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(headers)
+        writer.writerows(data)
+    print(f"Created: {filename}")
+
+write_csv('starting_inventory.csv', ['item_id', 'warehouse_id', 'opening_balance'], starting_inventory)
+write_csv('transactions.csv', ['txn_id', 'date_time', 'item_id', 'warehouse_id', 'txn_type', 'qty', 'user_id'], transactions)
+write_csv('physical_counts.csv', ['item_id', 'warehouse_id', 'counted_qty'], physical_counts)
+
+print("Data generation complete! You are ready to build the reconciliation engine.")
